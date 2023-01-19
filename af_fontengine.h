@@ -1,52 +1,28 @@
-/* af_fontengine.h - v0.1.0 - GPL-3.0-or-later
+/* af_fontengine.h - v0.1.1 - GPL-3.0-or-later
 
 Authored from 2023 by AnthoFoxo
 Huge credits to Sean Barrett and the community for making this project possible.
 Additional credits to Mikko Mononen memon@inside.org for fontstash, inspiring the api design
 
-This library is a text rendering engine designed to be scalable at any font size,
-with emphesis on being platform and rendering api agnostic written in ansi c.
-Additionally its designed to be as easy as possible to get started.
+Read the readme for more information and documentation
 
-Required libraries:
-stb_truetype.h - Used to load fonts and get font metrics along with creating sdf fields.
-stb_rect_pack.h - Used to pack smaller rectangles into a larger.
-See:
-	https://github.com/nothings/stb/blob/master/stb_truetype.h
-	https://github.com/nothings/stb/blob/master/stb_rect_pack.h
-The library code does *NOTHING* to ensure these are included properly.
-That responsibility is placed on you.
+Version history:
 
-Along with the stb libraries. The following c standard library functions are used:
-malloc, realloc, free, memset, memcpy, strlen
-
-All functions and defines in the library are prefixed affe_ and AFFE_ respectivly,
-with two exceptions: NULL, TRUE, FALSE; These will only be defined if not already defined.
-Code not part of the public api will have an additional underscore in the name to denote this.
-
-Example for including
-Note the stb libraries only need included when implmentation is expanded:
-
-#define STB_RECT_PACK_IMPLEMENTATION
-#define STB_TRUETYPE_IMPLEMENTATION
-#define AFFE_IMPLEMENTATION
-#include "stb_rect_pack.h"
-#include "stb_truetype.h"
-#include "af_fontengine.h"
-
-The library does not support any rendering by default, you must implment this yourself,
-however the library will create texture information and buffer information for you.
-
-For example usage see: opengl3.cpp
-
-Recent version history:
-0.1.0 (2023-01-19) initial release
+0.1.1 (2023-01-19)
+	removed exising flags, they are default behaviour now
+	added font rastization setttings
+	larger default font size
+	fixed flushing occuring for each quad
+	changed default buffer sizing to allow full usage of the memory
+	improved usage of utf8 decutting
+0.1.0 (2023-01-19)
+	initial release
 */
 
 #ifndef AF_FONTENGINE_H
 #define AF_FONTENGINE_H
 
-#define AFFE_VERSION 0.1.0
+#define AFFE_VERSION 0.1.1
 
 #ifndef NULL
 #	ifdef __cplusplus
@@ -81,8 +57,7 @@ extern "C" {
 #define AFFE_ERROR_STATES_OVERFLOW 2
 #define AFFE_ERROR_ATLAS_FULL 3
 
-#define AFFE_FLAGS_FLIP_UVS (1 << 0)
-#define AFFE_FLAGS_NORMALIZE_UVS (1 << 1)
+#define AFFE_FLAGS_NONE 0
 
 typedef struct affe_context affe_context;
 
@@ -106,6 +81,10 @@ struct affe_context_create_info
 	void(*error_proc)(void* error_user_ptr, int error);
 
 	unsigned int flags;
+
+	float edge_value;
+	int size;
+	int padding;
 };
 
 typedef struct affe_context_create_info affe_context_create_info;
@@ -144,7 +123,7 @@ AFFE_API void affe_text_draw(affe_context* ctx, float x, float y, const char* st
 #	define AFFE_INIT_GLYPHS 256
 #endif
 #ifndef AFFE_VERTEX_COUNT
-#	define AFFE_VERTEX_COUNT 512
+#	define AFFE_VERTEX_COUNT (256 * 6)
 #endif
 #ifndef AFFE_MAX_STATES
 #	define AFFE_MAX_STATES 20
@@ -337,7 +316,7 @@ void affe_state_pop(affe_context* ctx)
 void affe_state_clear(affe_context* ctx)
 {
 	affe__state* state = affe__state__get(ctx);
-	state->size = 12.0f;
+	state->size = 16.0f;
 	state->r = 1.0f;
 	state->g = 1.0f;
 	state->b = 1.0f;
@@ -470,7 +449,7 @@ static affe__glyph* affe__glyph__alloc(affe__font* font)
 }
 
 static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int codepoint, int size, int padding)
-{
+{	
 	affe__font* font_render = font;
 	
 	int hash = affe__hash(codepoint) & (AFFE_HASH_LUT_SIZE - 1);
@@ -508,7 +487,7 @@ static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int co
 	stbrp_rect rect;
 	memset(&rect, 0, sizeof(stbrp_rect));
 
-	unsigned char* pixels = stbtt_GetGlyphSDF(&font_render->metrics, scale, glyph_index, padding, 204, 32, &rect.w, &rect.h, NULL, NULL);
+	unsigned char* pixels = stbtt_GetGlyphSDF(&font_render->metrics, scale, glyph_index, padding, ctx->info.edge_value * 255, 255.0f / (float)padding, &rect.w, &rect.h, NULL, NULL);
 
 	if (pixels)
 	{
@@ -531,9 +510,9 @@ static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int co
 	if (glyph == NULL) return NULL;
 
 	glyph->s0 = rect.x;
-	glyph->t0 = rect.y;
+	glyph->t0 = rect.y + rect.h;
 	glyph->s1 = rect.x + rect.w;
-	glyph->t1 = rect.y + rect.h;
+	glyph->t1 = rect.y;
 	
 	glyph->x0 = x0 - (float)padding / scale;
 	glyph->y0 = y0 - (float)padding / scale;
@@ -551,6 +530,13 @@ static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int co
 	return glyph;
 }
 
+struct affe__quad
+{
+	float x0, y0, x1, y1, s0, t0, s1, t1, r, g, b, a;
+};
+
+typedef struct affe__quad affe__quad;
+
 void affe_text_draw(affe_context* ctx, float x, float y, const char* string, const char* end)
 {
 	if (ctx == NULL) return;
@@ -562,19 +548,26 @@ void affe_text_draw(affe_context* ctx, float x, float y, const char* string, con
 	if (font->data == NULL) return;
 
 	if (end == NULL) end = string + strlen(string);
-	
+
 	float scale = stbtt_ScaleForPixelHeight(&font->metrics, state->size);
 
 	int prev_glyph_index = -1;
-	unsigned int codepoint;
-	unsigned int utf8state = 0;
+	unsigned int codepoint = 0;
+	unsigned int utf8state = AFFE_UTF8_ACCEPT;
 
 	for (; string != end; ++string)
 	{
-		if (affe__decut(&utf8state, &codepoint, *(const unsigned char*)string))
-			continue;
+		unsigned int ret = affe__decut(&utf8state, &codepoint, *(const unsigned char*)string);
+		if (ret == AFFE_UTF8_REJECT)
+		{
+			utf8state = AFFE_UTF8_ACCEPT;
+			codepoint = 0;
+		}
+		if (ret != AFFE_UTF8_ACCEPT) continue;
 
-		affe__glyph* glyph = affe__glyph__get(ctx, font, codepoint, 32, 4);
+		utf8state = AFFE_UTF8_ACCEPT;
+
+		affe__glyph* glyph = affe__glyph__get(ctx, font, codepoint, ctx->info.size, ctx->info.padding);
 
 		if (glyph != NULL)
 		{
@@ -582,51 +575,39 @@ void affe_text_draw(affe_context* ctx, float x, float y, const char* string, con
 			{
 				if (ctx->verts_count + 6 > AFFE_VERTEX_COUNT) affe__flush(ctx);
 
-				float x0 = x + (float)glyph->x0 * scale;
-				float y0 = y + (float)glyph->y0 * scale;
-				float x1 = x + (float)glyph->x1 * scale;
-				float y1 = y + (float)glyph->y1 * scale;
+				affe__quad quad;
 
-				float s0 = glyph->s0;
-				float t0 = glyph->t0;
-				float s1 = glyph->s1;
-				float t1 = glyph->t1;
+				quad.x0 = x + (float)glyph->x0 * scale;
+				quad.y0 = y + (float)glyph->y0 * scale;
+				quad.x1 = x + (float)glyph->x1 * scale;
+				quad.y1 = y + (float)glyph->y1 * scale;
 
-				if (ctx->info.flags & AFFE_FLAGS_NORMALIZE_UVS)
-				{
-					s0 /= (float)ctx->info.width;
-					t0 /= (float)ctx->info.height;
-					s1 /= (float)ctx->info.width;
-					t1 /= (float)ctx->info.height;
-				}
+				quad.s0 = (float)glyph->s0 / (float)ctx->info.width;
+				quad.t0 = (float)glyph->t0 / (float)ctx->info.height;
+				quad.s1 = (float)glyph->s1 / (float)ctx->info.width;
+				quad.t1 = (float)glyph->t1 / (float)ctx->info.height;
 
-				if (ctx->info.flags & AFFE_FLAGS_FLIP_UVS)
-				{
-					float temp = t1;
-					t1 = t0;
-					t0 = temp;
-				}
+				quad.r = state->r;
+				quad.g = state->g;
+				quad.b = state->b;
+				quad.a = state->a;
 
-				float r = state->r;
-				float g = state->g;
-				float b = state->b;
-				float a = state->a;
-
-				ctx->verts[ctx->verts_count++] = affe_vertex(x0, y1, s0, t1, r, g, b, a);
-				ctx->verts[ctx->verts_count++] = affe_vertex(x0, y0, s0, t0, r, g, b, a);
-				ctx->verts[ctx->verts_count++] = affe_vertex(x1, y1, s1, t1, r, g, b, a);
-
-				ctx->verts[ctx->verts_count++] = affe_vertex(x1, y1, s1, t1, r, g, b, a);
-				ctx->verts[ctx->verts_count++] = affe_vertex(x0, y0, s0, t0, r, g, b, a);
-				ctx->verts[ctx->verts_count++] = affe_vertex(x1, y0, s1, t0, r, g, b, a);
-
-				affe__flush(ctx);
+				ctx->verts[ctx->verts_count++] = affe_vertex(quad.x0, quad.y1, quad.s0, quad.t1, quad.r, quad.g, quad.b, quad.a);
+				ctx->verts[ctx->verts_count++] = affe_vertex(quad.x0, quad.y0, quad.s0, quad.t0, quad.r, quad.g, quad.b, quad.a);
+				ctx->verts[ctx->verts_count++] = affe_vertex(quad.x1, quad.y1, quad.s1, quad.t1, quad.r, quad.g, quad.b, quad.a);
+				
+				ctx->verts[ctx->verts_count++] = affe_vertex(quad.x1, quad.y1, quad.s1, quad.t1, quad.r, quad.g, quad.b, quad.a);
+				ctx->verts[ctx->verts_count++] = affe_vertex(quad.x0, quad.y0, quad.s0, quad.t0, quad.r, quad.g, quad.b, quad.a);
+				ctx->verts[ctx->verts_count++] = affe_vertex(quad.x1, quad.y0, quad.s1, quad.t0, quad.r, quad.g, quad.b, quad.a);
 			}
 
 			x += (float)glyph->advance * scale;
 		}
+
 		prev_glyph_index = glyph != NULL ? glyph->index : -1;
-	}	
+	}
+
+	affe__flush(ctx);
 }
 
 #endif // AFFE_IMPLEMENTATION
