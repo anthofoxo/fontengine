@@ -6,6 +6,9 @@ Additional credits to Mikko Mononen memon@inside.org for fontstash, inspiring th
 
 Read the readme for more information and documentation
 
+Contributor list
+AnthoFoxo
+
 Version history:
 
 0.1.1 (2023-01-19)

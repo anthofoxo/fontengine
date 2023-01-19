@@ -3,6 +3,9 @@
 # Antho Foxo's Font Engine Overview
 This is an operating system and rendering api agnostic text rendering engine. We are using signed distance fields (sdfs) bitmaps inside a texture cache to achive scalable rendering at any font size without having to cache multiple sizes of each glyph. As text is drawn it'll populate the texture cache as needed.
 
+### Contributor list
+AnthoFoxo
+
 ## Dependencies
 Dependencies are kept at a minimum, only requiring the following:
 * [stb_truetype.h](https://github.com/nothings/stb/blob/master/stb_truetype.h)
