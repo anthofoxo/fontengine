@@ -1,16 +1,35 @@
-/* af_fontengine.h - v0.1.1 - GPL-3.0-or-later
+/* af_fontengine.h - v0.1.2
 
 Authored from 2023 by AnthoFoxo
-Huge credits to Sean Barrett and the community for making this project possible.
-Additional credits to Mikko Mononen memon@inside.org for fontstash, inspiring the api design
 
-Read the readme for more information and documentation
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
+
+Credits to Sean Barrett, Mikko Mononen, and the community for making this project possible.
+
+Visit the github page for updates and documentation: https://github.com/anthofoxo/fontengine
 
 Contributor list
 AnthoFoxo
 
-Version history:
+Recent version history:
 
+0.1.2 (2023-01-20)
+	updated copyright information
+	added parameter to specify the buffer size
+	added very simple newline and carriage return handling
+	changed default fallback count
 0.1.1 (2023-01-19)
 	removed exising flags, they are default behaviour now
 	added font rastization setttings
@@ -25,7 +44,7 @@ Version history:
 #ifndef AF_FONTENGINE_H
 #define AF_FONTENGINE_H
 
-#define AFFE_VERSION 0.1.1
+#define AFFE_VERSION 0.1.2
 
 #ifndef NULL
 #	ifdef __cplusplus
@@ -62,51 +81,60 @@ extern "C" {
 
 #define AFFE_FLAGS_NONE 0
 
-typedef struct affe_context affe_context;
+	typedef struct affe_context affe_context;
 
-struct affe_vertex
-{
-	float x, y, s, t, r, g, b, a;
-};
+	struct affe_vertex
+	{
+		float x, y, s, t, r, g, b, a;
+	};
 
-typedef struct affe_vertex affe_vertex;
+	typedef struct affe_vertex affe_vertex;
 
-struct affe_context_create_info
-{
-	int width, height;
-	void* user_ptr;
-	int(*create_proc)(void* user_ptr, int width, int height);
-	void(*update_proc)(void* user_ptr, int x, int y, int width, int height, void* pixels);
-	void(*draw_proc)(void* user_ptr, affe_vertex* verts, long long verts_count);
-	void(*delete_proc)(void* user_ptr);
+	struct affe_context_create_info
+	{
+		// Initial size of the cache
+		int width, height;
 
-	void* error_user_ptr;
-	void(*error_proc)(void* error_user_ptr, int error);
+		// User functions, called while the engine operates
+		void* user_ptr;
+		int(*create_proc)(void* user_ptr, int width, int height);
+		void(*update_proc)(void* user_ptr, int x, int y, int width, int height, void* pixels);
+		void(*draw_proc)(void* user_ptr, affe_vertex* verts, long long verts_count);
+		void(*delete_proc)(void* user_ptr);
 
-	unsigned int flags;
+		// Error function, called when an error occurs
+		void* error_user_ptr;
+		void(*error_proc)(void* error_user_ptr, int error);
 
-	float edge_value;
-	int size;
-	int padding;
-};
+		// How many quads to allocate space for in the vertex buffer
+		long long buffer_quad_count;
 
-typedef struct affe_context_create_info affe_context_create_info;
+		// Currently unused
+		unsigned int flags;
 
-AFFE_API affe_context* affe_context_create(const affe_context_create_info* info);
-AFFE_API void affe_context_delete(affe_context* ctx);
+		// Rasterizer settings
+		float edge_value;
+		int size;
+		int padding;
+	};
 
-AFFE_API int affe_font_add(affe_context* ctx, void* data, int index, int take_ownership);
-AFFE_API int affe_font_fallback(affe_context* ctx, int base, int fallback);
+	typedef struct affe_context_create_info affe_context_create_info;
 
-AFFE_API void affe_state_push(affe_context* ctx);
-AFFE_API void affe_state_pop(affe_context* ctx);
-AFFE_API void affe_state_clear(affe_context* ctx);
+	AFFE_API affe_context* affe_context_create(const affe_context_create_info* info);
+	AFFE_API void affe_context_delete(affe_context* ctx);
 
-AFFE_API void affe_set_size(affe_context* ctx, float size);
-AFFE_API void affe_set_color(affe_context* ctx, float r, float g, float b, float a);
-AFFE_API void affe_set_font(affe_context* ctx, int font);
+	AFFE_API int affe_font_add(affe_context* ctx, void* data, int index, int take_ownership);
+	AFFE_API int affe_font_fallback(affe_context* ctx, int base, int fallback);
 
-AFFE_API void affe_text_draw(affe_context* ctx, float x, float y, const char* string, const char* end);
+	AFFE_API void affe_state_push(affe_context* ctx);
+	AFFE_API void affe_state_pop(affe_context* ctx);
+	AFFE_API void affe_state_clear(affe_context* ctx);
+
+	AFFE_API void affe_set_size(affe_context* ctx, float size);
+	AFFE_API void affe_set_color(affe_context* ctx, float r, float g, float b, float a);
+	AFFE_API void affe_set_font(affe_context* ctx, int font);
+
+	AFFE_API void affe_text_draw(affe_context* ctx, float x, float y, const char* string, const char* end);
 
 #ifdef __cplusplus
 }
@@ -125,14 +153,11 @@ AFFE_API void affe_text_draw(affe_context* ctx, float x, float y, const char* st
 #ifndef AFFE_INIT_GLYPHS
 #	define AFFE_INIT_GLYPHS 256
 #endif
-#ifndef AFFE_VERTEX_COUNT
-#	define AFFE_VERTEX_COUNT (256 * 6)
-#endif
 #ifndef AFFE_MAX_STATES
-#	define AFFE_MAX_STATES 20
+#	define AFFE_MAX_STATES 16
 #endif
 #ifndef AFFE_MAX_FALLBACKS
-#	define AFFE_MAX_FALLBACKS 20
+#	define AFFE_MAX_FALLBACKS 16
 #endif
 
 struct affe__glyph
@@ -184,7 +209,7 @@ struct affe_context
 	long long fonts_capacity;
 	long long fonts_count;
 
-	affe_vertex verts[AFFE_VERTEX_COUNT];
+	affe_vertex* verts;
 	long long verts_count;
 
 	affe__state states[AFFE_MAX_STATES];
@@ -240,7 +265,7 @@ int affe_font_add(affe_context* ctx, void* data, int index, int take_ownership)
 
 	for (int i = 0; i < AFFE_HASH_LUT_SIZE; ++i)
 		font->lut[i] = -1;
-	
+
 	font->data = data;
 	font->is_owner = (unsigned char)take_ownership;
 
@@ -337,6 +362,7 @@ void affe_context_delete(affe_context* ctx)
 	for (int i = 0; i < ctx->fonts_count; ++i)
 		affe__font__free(ctx->fonts[i]);
 
+	if (ctx->verts) free(ctx->verts);
 	if (ctx->packer_nodes) free(ctx->packer_nodes);
 	if (ctx->fonts) free(ctx->fonts);
 	free(ctx);
@@ -344,31 +370,38 @@ void affe_context_delete(affe_context* ctx)
 
 affe_context* affe_context_create(const affe_context_create_info* info)
 {
+	// Allocate context
 	affe_context* ctx = (affe_context*)malloc(sizeof(affe_context));
 	if (ctx == NULL) goto error;
 	memset(ctx, 0, sizeof(affe_context));
 
 	ctx->info = *info;
 
+	// Setup rectangle packer
 	ctx->packer_nodes_count = ctx->info.width;
-
 	ctx->packer_nodes = (stbrp_node*)malloc(ctx->packer_nodes_count * sizeof(stbrp_node));
 	if (ctx->packer_nodes == NULL) goto error;
-
 	stbrp_init_target(&ctx->packer, ctx->info.width, ctx->info.height, ctx->packer_nodes, ctx->packer_nodes_count);
 
+	// Invoke user create function
 	if (ctx->info.create_proc != NULL)
 	{
 		if (ctx->info.create_proc(ctx->info.user_ptr, ctx->info.width, ctx->info.height) == FALSE)
 			goto error;
 	}
 
+	// Allocate font
 	ctx->fonts = (affe__font**)malloc(AFFE_INIT_FONTS * sizeof(affe__font*));
 	if (ctx->fonts == NULL) goto error;
 	memset(ctx->fonts, 0, AFFE_INIT_FONTS * sizeof(affe__font*));
 	ctx->fonts_capacity = AFFE_INIT_FONTS;
 	ctx->fonts_count = 0;
 
+	// Allocate vertex buffer
+	ctx->verts = (affe_vertex*)malloc(ctx->info.buffer_quad_count * 6 * sizeof(affe_vertex));
+	if (!ctx->verts) goto error;
+	
+	// Setup initial state
 	affe_state_push(ctx);
 	affe_state_clear(ctx);
 
@@ -452,9 +485,9 @@ static affe__glyph* affe__glyph__alloc(affe__font* font)
 }
 
 static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int codepoint, int size, int padding)
-{	
+{
 	affe__font* font_render = font;
-	
+
 	int hash = affe__hash(codepoint) & (AFFE_HASH_LUT_SIZE - 1);
 	int i = font->lut[hash];
 	while (i != -1)
@@ -465,7 +498,7 @@ static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int co
 	}
 
 	int glyph_index = stbtt_FindGlyphIndex(&font->metrics, codepoint);
-	
+
 	if (glyph_index == 0)
 	{
 		for (i = 0; i < font->fallbacks_count; ++i)
@@ -486,7 +519,7 @@ static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int co
 
 	int x0, y0, x1, y1;
 	stbtt_GetGlyphBox(&font_render->metrics, glyph_index, &x0, &y0, &x1, &y1);
-	
+
 	stbrp_rect rect;
 	memset(&rect, 0, sizeof(stbrp_rect));
 
@@ -516,7 +549,7 @@ static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int co
 	glyph->t0 = rect.y + rect.h;
 	glyph->s1 = rect.x + rect.w;
 	glyph->t1 = rect.y;
-	
+
 	glyph->x0 = x0 - (float)padding / scale;
 	glyph->y0 = y0 - (float)padding / scale;
 	glyph->x1 = x1 + (float)padding / scale;
@@ -558,6 +591,8 @@ void affe_text_draw(affe_context* ctx, float x, float y, const char* string, con
 	unsigned int codepoint = 0;
 	unsigned int utf8state = AFFE_UTF8_ACCEPT;
 
+	float start_x = x;
+
 	for (; string != end; ++string)
 	{
 		unsigned int ret = affe__decut(&utf8state, &codepoint, *(const unsigned char*)string);
@@ -570,13 +605,27 @@ void affe_text_draw(affe_context* ctx, float x, float y, const char* string, con
 
 		utf8state = AFFE_UTF8_ACCEPT;
 
+		// Ignore carriage returns
+		if (codepoint == '\r') continue;
+
+		if (codepoint == '\n')
+		{
+			int ascent, descent, line_gap;
+			stbtt_GetFontVMetrics(&font->metrics, &ascent, &descent, &line_gap);
+
+			x = start_x;
+			y -= (ascent + line_gap - descent) * scale;
+
+			continue;
+		}
+
 		affe__glyph* glyph = affe__glyph__get(ctx, font, codepoint, ctx->info.size, ctx->info.padding);
 
 		if (glyph != NULL)
 		{
 			if (glyph->s0 != glyph->s1 && glyph->t0 != glyph->t1)
 			{
-				if (ctx->verts_count + 6 > AFFE_VERTEX_COUNT) affe__flush(ctx);
+				if (ctx->verts_count + 6 > ctx->info.buffer_quad_count * 6) affe__flush(ctx);
 
 				affe__quad quad;
 
@@ -598,7 +647,7 @@ void affe_text_draw(affe_context* ctx, float x, float y, const char* string, con
 				ctx->verts[ctx->verts_count++] = affe_vertex(quad.x0, quad.y1, quad.s0, quad.t1, quad.r, quad.g, quad.b, quad.a);
 				ctx->verts[ctx->verts_count++] = affe_vertex(quad.x0, quad.y0, quad.s0, quad.t0, quad.r, quad.g, quad.b, quad.a);
 				ctx->verts[ctx->verts_count++] = affe_vertex(quad.x1, quad.y1, quad.s1, quad.t1, quad.r, quad.g, quad.b, quad.a);
-				
+
 				ctx->verts[ctx->verts_count++] = affe_vertex(quad.x1, quad.y1, quad.s1, quad.t1, quad.r, quad.g, quad.b, quad.a);
 				ctx->verts[ctx->verts_count++] = affe_vertex(quad.x0, quad.y0, quad.s0, quad.t0, quad.r, quad.g, quad.b, quad.a);
 				ctx->verts[ctx->verts_count++] = affe_vertex(quad.x1, quad.y0, quad.s1, quad.t0, quad.r, quad.g, quad.b, quad.a);

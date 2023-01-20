@@ -1,5 +1,10 @@
 !! Under active development, api *may* change, readme may not necessarily be up to date !!
 
+!! Todo: Move documentation into github wiki pages
+
+Sample text rendered from the engine with OpenGL as the backend
+![image](sample.png)
+
 # Antho Foxo's Font Engine Overview
 This is an operating system and rendering api agnostic text rendering engine. We are using signed distance fields (sdfs) bitmaps inside a texture cache to achive scalable rendering at any font size without having to cache multiple sizes of each glyph. As text is drawn it'll populate the texture cache as needed.
 
@@ -156,7 +161,8 @@ static int create_proc(void* user_ptr, int w, int h)
     // internalFormat = R8, format = GL_RED, type = GL_UNSIGNED_BYTE
 
     // Create a vertex array and an array buffer,
-    // buffer size should be `256 * 6 * sizeof(affe_vertex)`
+    // buffer size is specified during context creation
+    // buffer size in bytes = buffer_quad_count * 6 * sizeof(affe_vertex)
     // The buffer should be setup to use GL_STREAM_DRAW
     
     // The buffer will have three attributes stride = sizeof(affe_vertex)
@@ -242,6 +248,9 @@ static affe_context* make_context(user_data* impl_data)
     // Called when text is ready to be displayed
     info.draw_proc = &draw_proc;
     
+    // How many quads to allocate for our buffer?
+    info.buffer_quad_count = 256;
+
     // Rasterization settings
     info.edge_value = 204;
     info.padding = 8;
