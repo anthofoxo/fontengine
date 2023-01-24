@@ -130,6 +130,8 @@ affe_text_draw(ctx, 100, 100, text, NULL);
 // This specifies where the text should stop rendering,
 // If null `strlen` will be used to calculate this for you.
 
+// `affe_text_draw_inline` may be used to draw text while ignoring line breaks for performance increase
+
 // vvv Context is deleted vvv
 ```
 

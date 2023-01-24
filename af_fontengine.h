@@ -1,4 +1,4 @@
-/* af_fontengine.h - v0.1.2
+/* af_fontengine.h - v0.1.3
 
 Authored from 2023 by AnthoFoxo
 
@@ -24,7 +24,10 @@ Contributor list
 AnthoFoxo
 
 Recent version history:
-
+0.1.3 (2023-01-24)
+	fixed some compiler warnings
+	added "inline" text which ignores line breaks
+	some size values are now ints instead of long long
 0.1.2 (2023-01-20)
 	updated copyright information
 	added parameter to specify the buffer size
@@ -44,7 +47,7 @@ Recent version history:
 #ifndef AF_FONTENGINE_H
 #define AF_FONTENGINE_H
 
-#define AFFE_VERSION 0.1.2
+#define AFFE_VERSION 0.1.3
 
 #ifndef NULL
 #	ifdef __cplusplus
@@ -114,7 +117,7 @@ extern "C" {
 
 		// Rasterizer settings
 		float edge_value;
-		int size;
+		float size;
 		int padding;
 	};
 
@@ -135,6 +138,7 @@ extern "C" {
 	AFFE_API void affe_set_font(affe_context* ctx, int font);
 
 	AFFE_API void affe_text_draw(affe_context* ctx, float x, float y, const char* string, const char* end);
+	AFFE_API void affe_text_draw_inline(affe_context* ctx, float x, float y, const char* string, const char* end);
 
 #ifdef __cplusplus
 }
@@ -165,7 +169,7 @@ struct affe__glyph
 	unsigned int codepoint;
 	int index;
 	int next;
-	int size;
+	float size;
 	int advance;
 	int x0, y0, x1, y1;
 	int s0, t0, s1, t1;
@@ -207,7 +211,7 @@ struct affe_context
 
 	affe__font** fonts;
 	long long fonts_capacity;
-	long long fonts_count;
+	int fonts_count;
 
 	affe_vertex* verts;
 	long long verts_count;
@@ -217,7 +221,7 @@ struct affe_context
 
 	stbrp_context packer;
 	stbrp_node* packer_nodes;
-	long long packer_nodes_count;
+	int packer_nodes_count;
 };
 
 static void affe__font__free(affe__font* font)
@@ -400,7 +404,7 @@ affe_context* affe_context_create(const affe_context_create_info* info)
 	// Allocate vertex buffer
 	ctx->verts = (affe_vertex*)malloc(ctx->info.buffer_quad_count * 6 * sizeof(affe_vertex));
 	if (!ctx->verts) goto error;
-	
+
 	// Setup initial state
 	affe_state_push(ctx);
 	affe_state_clear(ctx);
@@ -484,7 +488,7 @@ static affe__glyph* affe__glyph__alloc(affe__font* font)
 	return &font->glyphs[font->glyphs_count++];
 }
 
-static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int codepoint, int size, int padding)
+static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int codepoint, float size, int padding)
 {
 	affe__font* font_render = font;
 
@@ -523,13 +527,14 @@ static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int co
 	stbrp_rect rect;
 	memset(&rect, 0, sizeof(stbrp_rect));
 
-	unsigned char* pixels = stbtt_GetGlyphSDF(&font_render->metrics, scale, glyph_index, padding, ctx->info.edge_value * 255, 255.0f / (float)padding, &rect.w, &rect.h, NULL, NULL);
+	unsigned char* pixels = stbtt_GetGlyphSDF(&font_render->metrics, scale, glyph_index, padding, (unsigned char)(ctx->info.edge_value * 255.0f), 255.0f / (float)padding, &rect.w, &rect.h, NULL, NULL);
 
 	if (pixels)
 	{
 		if (!stbrp_pack_rects(&ctx->packer, &rect, 1))
 		{
-			ctx->info.error_proc(ctx->info.error_user_ptr, AFFE_ERROR_ATLAS_FULL);
+			if(ctx->info.error_proc)
+				ctx->info.error_proc(ctx->info.error_user_ptr, AFFE_ERROR_ATLAS_FULL);
 			if (!stbrp_pack_rects(&ctx->packer, &rect, 1)) return NULL;
 		}
 
@@ -550,10 +555,10 @@ static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int co
 	glyph->s1 = rect.x + rect.w;
 	glyph->t1 = rect.y;
 
-	glyph->x0 = x0 - (float)padding / scale;
-	glyph->y0 = y0 - (float)padding / scale;
-	glyph->x1 = x1 + (float)padding / scale;
-	glyph->y1 = y1 + (float)padding / scale;
+	glyph->x0 = (int)(x0 - (float)padding / scale);
+	glyph->y0 = (int)(y0 - (float)padding / scale);
+	glyph->x1 = (int)(x1 + (float)padding / scale);
+	glyph->y1 = (int)(y1 + (float)padding / scale);
 
 	glyph->codepoint = codepoint;
 	glyph->size = size;
@@ -573,7 +578,90 @@ struct affe__quad
 
 typedef struct affe__quad affe__quad;
 
+int affe__text__line(const char* string, const char* end, const char** line_end, const char** next_start)
+{
+	if (!string) return FALSE;
+	if (end == NULL) end = string + strlen(string);
+
+	// since null needs to be checked to split the final line, add one to prevent early loop exit
+	++end;
+
+	unsigned int prev_codepoint = 0;
+
+	// determines if an \r character was occuring, to test for CRLF line ending
+	int did_extra = FALSE;
+
+	// Loop through all codepoints
+	for (; string != end; ++string)
+	{
+		// Get "codepoint", not actually a codepoint since this isnt utf8 compliant, however line endings used are ascii, so its fine
+		unsigned int codepoint = *string;
+
+		if (prev_codepoint == '\r' && codepoint == '\n')
+		{
+			*line_end = string - 1;
+			*next_start = string + 1;
+			return TRUE;
+		}
+
+		if (codepoint == '\r')
+		{
+			did_extra = TRUE;
+			prev_codepoint = codepoint;
+			continue;
+		}
+
+		if (did_extra)
+		{
+			*line_end = string - 1;
+			*next_start = string;
+			return TRUE;
+		}
+
+		if (codepoint == '\n')
+		{
+			*line_end = string;
+			*next_start = string + 1;
+			return TRUE;
+		}
+
+		if (codepoint == '\0')
+		{
+			*line_end = string;
+			*next_start = NULL;
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
 void affe_text_draw(affe_context* ctx, float x, float y, const char* string, const char* end)
+{
+	if (ctx == NULL) return;
+	if (end == NULL) end = string + strlen(string);
+
+	affe__state* state = affe__state__get(ctx);
+	if (state->font < 0 || state->font >= ctx->fonts_count) return;
+
+	affe__font* font = ctx->fonts[state->font];
+	if (font->data == NULL) return;
+
+	int ascent, descent, line_gap;
+	stbtt_GetFontVMetrics(&font->metrics, &ascent, &descent, &line_gap);
+	int line_height = ascent + line_gap - descent;
+	float scale = stbtt_ScaleForPixelHeight(&font->metrics, state->size);
+
+	const char* line_end, *next_start;
+	while (affe__text__line(string, end, &line_end, &next_start))
+	{
+		affe_text_draw_inline(ctx, x, y, string, line_end);
+		y -= (float)line_height * scale;
+		string = next_start;
+	}
+}
+
+void affe_text_draw_inline(affe_context* ctx, float x, float y, const char* string, const char* end)
 {
 	if (ctx == NULL) return;
 
@@ -604,20 +692,6 @@ void affe_text_draw(affe_context* ctx, float x, float y, const char* string, con
 		if (ret != AFFE_UTF8_ACCEPT) continue;
 
 		utf8state = AFFE_UTF8_ACCEPT;
-
-		// Ignore carriage returns
-		if (codepoint == '\r') continue;
-
-		if (codepoint == '\n')
-		{
-			int ascent, descent, line_gap;
-			stbtt_GetFontVMetrics(&font->metrics, &ascent, &descent, &line_gap);
-
-			x = start_x;
-			y -= (ascent + line_gap - descent) * scale;
-
-			continue;
-		}
 
 		affe__glyph* glyph = affe__glyph__get(ctx, font, codepoint, ctx->info.size, ctx->info.padding);
 
