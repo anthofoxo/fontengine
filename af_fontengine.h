@@ -1,4 +1,4 @@
-/* af_fontengine.h - v0.1.3
+/* af_fontengine.h - v0.1.4
 
 Authored from 2023 by AnthoFoxo
 
@@ -16,14 +16,18 @@ freely, subject to the following restrictions:
    misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
 
-Credits to Sean Barrett, Mikko Mononen, and the community for making this project possible.
+Credits to Sean Barrett, Mikko Mononen, Bjoern Hoehrmann, and the community for making this project possible.
 
-Visit the github page for updates and documentation: https://github.com/anthofoxo/fontengine
+Visit the github page for updates: https://github.com/anthofoxo/fontengine
+Full documentation is below.
 
 Contributor list
 AnthoFoxo
 
 Recent version history:
+0.1.4 (2023-01-25)
+	some in header documentation (to be improved)
+	added buffer flush control (affe_text_draw, now takes advantage of this)
 0.1.3 (2023-01-24)
 	fixed some compiler warnings
 	added "inline" text which ignores line breaks
@@ -47,7 +51,7 @@ Recent version history:
 #ifndef AF_FONTENGINE_H
 #define AF_FONTENGINE_H
 
-#define AFFE_VERSION 0.1.3
+#define AFFE_VERSION 0.1.4
 
 #ifndef NULL
 #	ifdef __cplusplus
@@ -76,18 +80,28 @@ extern "C" {
 #	define TRUE 1
 #endif
 
+	// Defines an invalid font
 #define AFFE_INVALID -1
 
+// Error states
 #define AFFE_ERROR_STATES_UNDERFLOW 1
 #define AFFE_ERROR_STATES_OVERFLOW 2
 #define AFFE_ERROR_ATLAS_FULL 3
 
+// Controls how the buffer is flushed
+// Automatic: buffer never needs manually flushed
+// None: buffer must be manually flushed at the end of the frame
+#define AFFE_BUFFER_FLUSH_BEHAVIOR_AUTOMATIC 0
+#define AFFE_BUFFER_FLUSH_BEHAVIOR_NONE 1
+
+// Defined backend feature supprt, currently unused, primitive restart may be supported in the future
 #define AFFE_FLAGS_NONE 0
 
 	typedef struct affe_context affe_context;
 
 	struct affe_vertex
 	{
+		// TODO: change rgba floats to a single unsigned int, provide functions to easily convert between the two
 		float x, y, s, t, r, g, b, a;
 	};
 
@@ -123,21 +137,42 @@ extern "C" {
 
 	typedef struct affe_context_create_info affe_context_create_info;
 
+	// ----- context management -----
+
 	AFFE_API affe_context* affe_context_create(const affe_context_create_info* info);
 	AFFE_API void affe_context_delete(affe_context* ctx);
+
+	// ----- fonts -----
 
 	AFFE_API int affe_font_add(affe_context* ctx, void* data, int index, int take_ownership);
 	AFFE_API int affe_font_fallback(affe_context* ctx, int base, int fallback);
 
+	// ----- state management -----
+
+	// Errors: strong error guarantee
 	AFFE_API void affe_state_push(affe_context* ctx);
+
+	// Errors: strong error guarantee
 	AFFE_API void affe_state_pop(affe_context* ctx);
+
 	AFFE_API void affe_state_clear(affe_context* ctx);
+
+	// ----- state setting -----
 
 	AFFE_API void affe_set_size(affe_context* ctx, float size);
 	AFFE_API void affe_set_color(affe_context* ctx, float r, float g, float b, float a);
 	AFFE_API void affe_set_font(affe_context* ctx, int font);
 
+	// ----- buffer control -----
+
+	AFFE_API void affe_buffer_flush_behavior(affe_context* ctx, int behavior);
+	AFFE_API void affe_buffer_flush(affe_context* ctx);
+
+	// ----- text drawing -----
+
 	AFFE_API void affe_text_draw(affe_context* ctx, float x, float y, const char* string, const char* end);
+
+	// Draws a string of text in a single line, ignoring all line endings
 	AFFE_API void affe_text_draw_inline(affe_context* ctx, float x, float y, const char* string, const char* end);
 
 #ifdef __cplusplus
@@ -222,6 +257,8 @@ struct affe_context
 	stbrp_context packer;
 	stbrp_node* packer_nodes;
 	int packer_nodes_count;
+
+	int buffer_flush_behavior;
 };
 
 static void affe__font__free(affe__font* font)
@@ -321,6 +358,11 @@ void affe_set_font(affe_context* ctx, int font)
 	affe__state__get(ctx)->font = font;
 }
 
+void affe_buffer_flush_behavior(affe_context* ctx, int behavior)
+{
+	ctx->buffer_flush_behavior = behavior;
+}
+
 void affe_state_push(affe_context* ctx)
 {
 	if (ctx->states_count >= AFFE_MAX_STATES)
@@ -402,6 +444,7 @@ affe_context* affe_context_create(const affe_context_create_info* info)
 	ctx->fonts_count = 0;
 
 	// Allocate vertex buffer
+	ctx->buffer_flush_behavior = AFFE_BUFFER_FLUSH_BEHAVIOR_AUTOMATIC;
 	ctx->verts = (affe_vertex*)malloc(ctx->info.buffer_quad_count * 6 * sizeof(affe_vertex));
 	if (!ctx->verts) goto error;
 
@@ -454,7 +497,7 @@ static unsigned int affe__decut(unsigned int* state, unsigned int* codep, unsign
 	return *state;
 }
 
-static void affe__flush(affe_context* ctx)
+void affe_buffer_flush(affe_context* ctx)
 {
 	if (ctx->verts_count <= 0) return;
 
@@ -533,7 +576,7 @@ static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int co
 	{
 		if (!stbrp_pack_rects(&ctx->packer, &rect, 1))
 		{
-			if(ctx->info.error_proc)
+			if (ctx->info.error_proc)
 				ctx->info.error_proc(ctx->info.error_user_ptr, AFFE_ERROR_ATLAS_FULL);
 			if (!stbrp_pack_rects(&ctx->packer, &rect, 1)) return NULL;
 		}
@@ -581,23 +624,18 @@ typedef struct affe__quad affe__quad;
 int affe__text__line(const char* string, const char* end, const char** line_end, const char** next_start)
 {
 	if (!string) return FALSE;
-	if (end == NULL) end = string + strlen(string);
+	if (!end) end = string + strlen(string);
 
 	// since null needs to be checked to split the final line, add one to prevent early loop exit
 	++end;
 
-	unsigned int prev_codepoint = 0;
+	int checking_crlf = FALSE;
 
-	// determines if an \r character was occuring, to test for CRLF line ending
-	int did_extra = FALSE;
-
-	// Loop through all codepoints
 	for (; string != end; ++string)
 	{
-		// Get "codepoint", not actually a codepoint since this isnt utf8 compliant, however line endings used are ascii, so its fine
 		unsigned int codepoint = *string;
 
-		if (prev_codepoint == '\r' && codepoint == '\n')
+		if (checking_crlf && codepoint == '\n')
 		{
 			*line_end = string - 1;
 			*next_start = string + 1;
@@ -606,12 +644,11 @@ int affe__text__line(const char* string, const char* end, const char** line_end,
 
 		if (codepoint == '\r')
 		{
-			did_extra = TRUE;
-			prev_codepoint = codepoint;
+			checking_crlf = TRUE;
 			continue;
 		}
 
-		if (did_extra)
+		if (checking_crlf)
 		{
 			*line_end = string - 1;
 			*next_start = string;
@@ -638,8 +675,8 @@ int affe__text__line(const char* string, const char* end, const char** line_end,
 
 void affe_text_draw(affe_context* ctx, float x, float y, const char* string, const char* end)
 {
-	if (ctx == NULL) return;
-	if (end == NULL) end = string + strlen(string);
+	if (!ctx) return;
+	if (!end) end = string + strlen(string);
 
 	affe__state* state = affe__state__get(ctx);
 	if (state->font < 0 || state->font >= ctx->fonts_count) return;
@@ -647,31 +684,43 @@ void affe_text_draw(affe_context* ctx, float x, float y, const char* string, con
 	affe__font* font = ctx->fonts[state->font];
 	if (font->data == NULL) return;
 
+	int prev_flush_behavior = ctx->buffer_flush_behavior;
+
+	if (prev_flush_behavior == AFFE_BUFFER_FLUSH_BEHAVIOR_AUTOMATIC)
+		affe_buffer_flush_behavior(ctx, AFFE_BUFFER_FLUSH_BEHAVIOR_NONE);
+
+	// TODO: Store this information inside the font
 	int ascent, descent, line_gap;
 	stbtt_GetFontVMetrics(&font->metrics, &ascent, &descent, &line_gap);
 	int line_height = ascent + line_gap - descent;
 	float scale = stbtt_ScaleForPixelHeight(&font->metrics, state->size);
 
-	const char* line_end, *next_start;
+	const char* line_end, * next_start;
 	while (affe__text__line(string, end, &line_end, &next_start))
 	{
 		affe_text_draw_inline(ctx, x, y, string, line_end);
 		y -= (float)line_height * scale;
 		string = next_start;
 	}
+
+	if (prev_flush_behavior == AFFE_BUFFER_FLUSH_BEHAVIOR_AUTOMATIC)
+	{
+		affe_buffer_flush(ctx);
+		affe_buffer_flush_behavior(ctx, AFFE_BUFFER_FLUSH_BEHAVIOR_AUTOMATIC);
+	}
 }
 
 void affe_text_draw_inline(affe_context* ctx, float x, float y, const char* string, const char* end)
 {
-	if (ctx == NULL) return;
+	if (!ctx) return;
 
 	affe__state* state = affe__state__get(ctx);
 	if (state->font < 0 || state->font >= ctx->fonts_count) return;
 
 	affe__font* font = ctx->fonts[state->font];
-	if (font->data == NULL) return;
+	if (!font->data) return;
 
-	if (end == NULL) end = string + strlen(string);
+	if (!end) end = string + strlen(string);
 
 	float scale = stbtt_ScaleForPixelHeight(&font->metrics, state->size);
 
@@ -695,11 +744,11 @@ void affe_text_draw_inline(affe_context* ctx, float x, float y, const char* stri
 
 		affe__glyph* glyph = affe__glyph__get(ctx, font, codepoint, ctx->info.size, ctx->info.padding);
 
-		if (glyph != NULL)
+		if (glyph)
 		{
 			if (glyph->s0 != glyph->s1 && glyph->t0 != glyph->t1)
 			{
-				if (ctx->verts_count + 6 > ctx->info.buffer_quad_count * 6) affe__flush(ctx);
+				if (ctx->verts_count + 6 > ctx->info.buffer_quad_count * 6) affe_buffer_flush(ctx);
 
 				affe__quad quad;
 
@@ -733,7 +782,8 @@ void affe_text_draw_inline(affe_context* ctx, float x, float y, const char* stri
 		prev_glyph_index = glyph != NULL ? glyph->index : -1;
 	}
 
-	affe__flush(ctx);
+	if (ctx->buffer_flush_behavior == AFFE_BUFFER_FLUSH_BEHAVIOR_AUTOMATIC)
+		affe_buffer_flush(ctx);
 }
 
 #endif // AFFE_IMPLEMENTATION

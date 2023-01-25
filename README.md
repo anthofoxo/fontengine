@@ -170,7 +170,7 @@ static int create_proc(void* user_ptr, int w, int h)
     // The buffer will have three attributes stride = sizeof(affe_vertex)
     // 2 floats for xy position;             offset = (const void*)offsetof(affe_vertex, x)
     // 2 floats for st texture coordinates   offset = (const void*)offsetof(affe_vertex, s)
-	// 4 floats for rgba color               offset = (const void*)offsetof(affe_vertex, r)
+    // 4 floats for rgba color               offset = (const void*)offsetof(affe_vertex, r)
 
     // Create a vertex and fragment shader, compile and link them into a program
 
@@ -410,8 +410,24 @@ When stack overflow or underflow errors occur, an error is reported but the engi
 When the cache fails to find a location for a glyph, the glyph will just not render. Theres no current way to fix this other than to recreate the context with a larger cache.
 
 # Known bugs
-* Text rendering ignores control characters, rendering as a small box. (include newlines etc)
+* Text rendering ignores control characters, rendering as a small box.
 * Some international glyphs do not rasterize correctly.
+
+# Buffer flush behavior / buffer flush control
+
+Since v0.1.4 you can have more control over how the vertex buffer gets flushed. Flushing the buffer simply invokes the user draw callback with the generated vertex information.
+
+To change the buffer behavior, call `affe_buffer_flush_behavior` with one of these constants.
+
+`affe_buffer_flush` may be called to manually flush the buffer, this is pointless to do on default buffer control.
+
+`AFFE_BUFFER_FLUSH_BEHAVIOR_AUTOMATIC` :
+Default behavior, the buffer is flushed at the end of text draws.
+
+`AFFE_BUFFER_FLUSH_BEHAVIOR_NONE` :
+Flushing is not done at the end of draw calls, must manually invoke at the end of frame. Note: Buffer flush will still be invoked when the buffer is filled 
+
+To manually flush the buffer, call `affe_buffer_flush`.
 
 # Planned features
 * Font kerning
