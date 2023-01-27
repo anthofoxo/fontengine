@@ -24,6 +24,10 @@ Contributor list
 AnthoFoxo
 
 Recent version history:
+0.1.6 (2023-01-27)
+	added a few safety checks
+	added api function to get user pointer
+	opengl3 implmentation included
 0.1.5 (2023-01-26)
 	fixed a bug in line splitting where multiple carriage returns would only output as one
 	improved performance slightly in line splitting
@@ -153,8 +157,14 @@ typedef struct affe_context_create_info affe_context_create_info;
 AFFE_API affe_context* affe_context_create(const affe_context_create_info* info);
 AFFE_API void affe_context_delete(affe_context* ctx);
 
+// ----- user ptr -----
+
+// Errors: nofail error guarantee
+AFFE_API void* affe_user_ptr(affe_context* ctx);
+
 // ----- fonts -----
 
+// Errors: nofail error guarantee
 AFFE_API int affe_font_add(affe_context* ctx, void* data, int index, int take_ownership);
 
 // Errors: no error guarantee
@@ -335,6 +345,8 @@ error:
 
 int affe_font_add(affe_context* ctx, void* data, int index, int take_ownership)
 {
+	if (!ctx) return AFFE_INVALID;
+
 	int font_index = affe__font__alloc(ctx);
 	if (font_index == AFFE_INVALID) return AFFE_INVALID;
 
@@ -359,6 +371,8 @@ error:
 
 int affe_font_fallback(affe_context* ctx, int base, int fallback)
 {
+	if (!ctx) return FALSE;
+
 	affe__font* font_base = ctx->fonts[base];
 
 	if (font_base->fallbacks_count < AFFE_MAX_FALLBACKS)
@@ -374,6 +388,12 @@ static affe__state* affe__state__get(affe_context* ctx)
 {
 	if (!ctx) return NULL;
 	return &ctx->states[ctx->states_count - 1];
+}
+
+void* affe_user_ptr(affe_context* ctx)
+{
+	if (!ctx) return NULL;
+	return ctx->info.user_ptr;
 }
 
 void affe_set_size(affe_context* ctx, float size)
