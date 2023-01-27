@@ -41,12 +41,23 @@ int main()
 }
 ```
 
+## Error Safety (Based on C++ exception safety)
+
+All API functions provide some level of error safety, that is if an error occurs, you have some guarentee that it doesn't break the application.
+API functions which invoke user callbacks are not taken into consideration when determining error safety.
+All API functions have the end goal of having strong error guarentee.
+
+- Nofail error guarantee - The function never causes errors. Nofail errors are reported by other means or concealed.
+- Strong error guarantee - If the function causes an error, the state of the program is rolled back to the state just before the function call.
+- Basic error guarantee - If the function causes an error, the program is in a valid state. No resources are leaked, and all objects' invariants are intact.
+- No error guarantee - If the function causes an error, the program may not be in a valid state: resource leaks, memory corruption, or other invariant-destroying errors may have occurred.
+
 ## API Convention
 * Macros are prefixed with `AFFE_` with exception of `NULL`, `FALSE`, and `TRUE`
 * Functions are prefixed with `affe_`
 * Implmentation specific functions are prefixed with `affe__`
 * Functions always take `affe_context*` as their first parameter, with exception of `affe_context_create`
-* User procs always have the user pointer passed as the first parameter
+* User callbacks always have the user pointer passed as the second parameter
 
 # Creating and deleting the context
 All state is contained inside a context. To create a context, you must fill out `affe_context_create_info` which tells the the engine various important details to be usable. When you are done, make sure to delete it.
@@ -71,9 +82,12 @@ int main()
     info.delete_proc = NULL;
     
     // Rasterization settings (more about these later)
-    info.edge_value = 204;
+    info.edge_value = 0.8f;
     info.padding = 8;
     info.size = 48;
+
+    // Tell the engine how much space to allocate for the buffer (This is not a byte count)
+    info.buffer_quad_count = 256;
 
     // Create the context with all the settings
     affe_context* ctx = affe_context_create(&info);
@@ -110,7 +124,7 @@ int font = affe_font_add(ctx, data, 0, TRUE);
 
 // If font is `AFFE_INVALID` then the font failed to be added
 // After a font is loaded you can set it as the current font
-if(font != AFFE_INVALID) affe_set_font(ctx, font);
+affe_set_font(ctx, font);
 
 // vvv Context is deleted vvv
 ```
@@ -155,7 +169,7 @@ struct user_data
 
 typedef struct user_data user_data;
 
-static int create_proc(void* user_ptr, int w, int h)
+static int create_proc(affe_context* ctx, void* user_ptr, int w, int h)
 {
     // Create an opengl texture with the specified size
     // Pixel data will later be provided in parts to update the image
@@ -163,8 +177,8 @@ static int create_proc(void* user_ptr, int w, int h)
     // internalFormat = R8, format = GL_RED, type = GL_UNSIGNED_BYTE
 
     // Create a vertex array and an array buffer,
-    // buffer size is specified during context creation
-    // buffer size in bytes = buffer_quad_count * 6 * sizeof(affe_vertex)
+    // The buffer size is based on the number of quads specified during context creation
+    // This size in bytes can be retrieved by `affe_buffer_size`
     // The buffer should be setup to use GL_STREAM_DRAW
     
     // The buffer will have three attributes stride = sizeof(affe_vertex)
@@ -180,12 +194,12 @@ static int create_proc(void* user_ptr, int w, int h)
 	return TRUE;
 }
 
-static void delete_proc(void* user_ptr)
+static void delete_proc(affe_context* ctx, void* user_ptr)
 {
     // Delete the texture, vertex array, vertex buffer, and shader program
 }
 
-static void update_proc(void* user_ptr, int x, int y, int w, int h, void* pixels)
+static void update_proc(affe_context* ctx, void* user_ptr, int x, int y, int w, int h, void* pixels)
 {
     // An offset and size is provided to you along with pixel data to modify the texture
 
@@ -202,7 +216,7 @@ static void update_proc(void* user_ptr, int x, int y, int w, int h, void* pixels
     // glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 }
 
-static void draw_proc(void* user_ptr, affe_vertex* verts, long long verts_count)
+static void draw_proc(affe_context* ctx, void* user_ptr, affe_vertex* verts, long long verts_count)
 {
     // The vertex is provided along with the number of verticies
     // This is in an interleaved format
@@ -254,7 +268,7 @@ static affe_context* make_context(user_data* impl_data)
     info.buffer_quad_count = 256;
 
     // Rasterization settings
-    info.edge_value = 204;
+    info.edge_value = 0.8f;
     info.padding = 8;
     info.size = 48;
 }
@@ -322,8 +336,7 @@ layout(location = 0) out vec4 out_col;
 uniform sampler2D u_sampler;
 
 // This is the same value as in the c code,
-// however this is in the 0-1 range where in c it's 0-255
-const float onedge_value = 0.8; // 204
+const float onedge_value = 0.8;
 
 void main(void)
 {
@@ -349,7 +362,7 @@ void main(void)
 The three main rasterizer settings are `edge_value`, `padding`, and `size`
 * **size** - controls at what size the sdf will be created, unrelated to font size. The higher the better looking text you'll get, at the cost of texture cache space. 48 is a good default.
 * **padding** - controls how much space is put around the glyph, this is needed to actually store the distance field. The heigher the better edges can look, at the cost of texture size, 8 is a good default.
-* **edge_value** - controls at what value is considered the "edge" of the glyph, in shaders this is used to discard or blend away stuff too far away. The higher this is, the better represented the distance fields are. 204 (0.8) is a good default.
+* **edge_value** - controls at what value is considered the "edge" of the glyph, in shaders this is used to discard or blend away stuff too far away. The higher this is, the better represented the distance fields are. 0.8 is a good default.
 
 # State management
 The engine has a concept of a state stack. Where you can change rendering settings and push/pop for later.
@@ -377,9 +390,12 @@ affe_state_clear(ctx);
 State includes color, current font, styling etc.
 
 ```c
+// horizontal alignment AFFE_ALIGN_LEFT, AFFE_ALIGN_RIGHT, AFFE_ALIGN_RIGHT
+
 affe_set_color(ctx, r, g, b, a); // rgba, engine does not clip these (0-1)
 affe_set_font(ctx, font);
 affe_set_size(ctx, size); // Font size in pixels
+affe_set_alignment(ctx, AFFE_ALIGN_CENTER); // The cursor point is now where text will be centered on
 ```
 
 # Font fallbacks
@@ -421,10 +437,10 @@ To change the buffer behavior, call `affe_buffer_flush_behavior` with one of the
 
 `affe_buffer_flush` may be called to manually flush the buffer, this is pointless to do on default buffer control.
 
-`AFFE_BUFFER_FLUSH_BEHAVIOR_AUTOMATIC` :
+`AFFE_BUFFER_FLUSH_CONTROL_AUTOMATIC` :
 Default behavior, the buffer is flushed at the end of text draws.
 
-`AFFE_BUFFER_FLUSH_BEHAVIOR_NONE` :
+`AFFE_BUFFER_FLUSH_CONTROL_NONE` :
 Flushing is not done at the end of draw calls, must manually invoke at the end of frame. Note: Buffer flush will still be invoked when the buffer is filled 
 
 To manually flush the buffer, call `affe_buffer_flush`.
@@ -433,4 +449,4 @@ To manually flush the buffer, call `affe_buffer_flush`.
 * Font kerning
 * Cache resizing
 * Cache clearing
-* Text alignment
+* Veritcal text alignment
