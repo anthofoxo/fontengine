@@ -1,4 +1,4 @@
-/* af_fontengine_impl_ogl3.h Last Updated: v0.1.6
+/* af_fontengine_impl_ogl3.h Last Updated: v0.1.7
 
 Authored from 2023 by AnthoFoxo
 
@@ -189,6 +189,11 @@ static void destroy(affe_context* ctx, void* user_ptr)
 	glDeleteTextures(1, &ptr->texture);
 }
 
+static void error_proc(affe_context* ctx, void* error_ptr, int error)
+{
+	if (error == AFFE_ERROR_ATLAS_FULL) affe_cache_invalidate(ctx);
+}
+
 affe_context* affe_ogl3_context_create(int width, int height, int quads, int padding, int size)
 {
 	affe__ogl* impl;
@@ -206,11 +211,12 @@ affe_context* affe_ogl3_context_create(int width, int height, int quads, int pad
 	info.update_proc = &update;
 	info.draw_proc = &draw;
 	info.delete_proc = &destroy;
+	info.error_proc = &error_proc;
 	
 	info.buffer_quad_count = quads;
 	info.edge_value = 0.8f;
 	info.padding = padding;
-	info.size = size;
+	info.size = (float)size;
 
 	return affe_context_create(&info);
 }

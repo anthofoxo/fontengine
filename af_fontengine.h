@@ -1,4 +1,4 @@
-/* af_fontengine.h - v0.1.5
+/* af_fontengine.h - v0.1.7
 
 Authored from 2023 by AnthoFoxo
 
@@ -24,6 +24,11 @@ Contributor list
 AnthoFoxo
 
 Recent version history:
+0.1.7 (2023-01-28)
+	fixed bug where text width incorrectly used padding
+	removed error proc from having its own user ptr
+	added cache invalidation, allowing a case where the cache is full to continue operation
+	changed null definition
 0.1.6 (2023-01-27)
 	added a few safety checks
 	added api function to get user pointer
@@ -61,14 +66,10 @@ Recent version history:
 #ifndef AF_FONTENGINE_H
 #define AF_FONTENGINE_H
 
-#define AFFE_VERSION 0.1.5
+#define AFFE_VERSION 0.1.7
 
 #ifndef NULL
-#	ifdef __cplusplus
-#		define NULL 0
-#	else
-#		define NULL ((void*)0)
-#	endif
+#	define NULL 0
 #endif
 
 #ifndef AFFE_API
@@ -90,7 +91,7 @@ extern "C" {
 #	define TRUE 1
 #endif
 
-	// Defines an invalid font
+// Defines an invalid font
 #define AFFE_INVALID -1
 
 // Error states
@@ -98,7 +99,7 @@ extern "C" {
 #define AFFE_ERROR_STATES_OVERFLOW 2
 #define AFFE_ERROR_ATLAS_FULL 3
 
-// Alignment
+// Horizontal alignment
 #define AFFE_ALIGN_LEFT (1 << 0)
 #define AFFE_ALIGN_CENTER (1 << 1)
 #define AFFE_ALIGN_RIGHT (1 << 2)
@@ -133,10 +134,7 @@ struct affe_context_create_info
 	void(*update_proc)(affe_context* ctx, void* user_ptr, int x, int y, int width, int height, void* pixels);
 	void(*draw_proc)(affe_context* ctx, void* user_ptr, affe_vertex* verts, long long verts_count);
 	void(*delete_proc)(affe_context* ctx, void* user_ptr);
-
-	// Error function, called when an error occurs
-	void* error_user_ptr;
-	void(*error_proc)(affe_context* ctx, void* error_user_ptr, int error);
+	void(*error_proc)(affe_context* ctx, void* user_ptr, int error);
 
 	// How many quads to allocate space for in the vertex buffer
 	long long buffer_quad_count;
@@ -167,7 +165,7 @@ AFFE_API void* affe_user_ptr(affe_context* ctx);
 // Errors: nofail error guarantee
 AFFE_API int affe_font_add(affe_context* ctx, void* data, int index, int take_ownership);
 
-// Errors: no error guarantee
+// Errors: nofail error guarantee
 AFFE_API int affe_font_fallback(affe_context* ctx, int base, int fallback);
 
 // ----- state management -----
@@ -181,11 +179,24 @@ AFFE_API void affe_state_pop(affe_context* ctx);
 // Errors: nofail error guarantee
 AFFE_API void affe_state_clear(affe_context* ctx);
 
+// ----- cache control -----
+
+// Errors: nofail error guarantee
+AFFE_API void affe_cache_invalidate(affe_context* ctx);
+
+
 // ----- state setting -----
 
+// Errors: nofail error guarantee
 AFFE_API void affe_set_size(affe_context* ctx, float size);
+
+// Errors: nofail error guarantee
 AFFE_API void affe_set_color(affe_context* ctx, float r, float g, float b, float a);
+
+// Errors: nofail error guarantee
 AFFE_API void affe_set_font(affe_context* ctx, int font);
+
+// Errors: nofail error guarantee
 AFFE_API void affe_set_alignment(affe_context* ctx, int alignment);
 
 // ----- buffer control -----
@@ -251,6 +262,7 @@ struct affe__glyph
 	int next;
 	float size;
 	int advance;
+	int padding;
 	int x0, y0, x1, y1;
 	int s0, t0, s1, t1;
 };
@@ -272,6 +284,8 @@ struct affe__font
 
 	int fallbacks[AFFE_MAX_FALLBACKS];
 	int fallbacks_count;
+
+	int ascent, descent, line_gap;
 };
 
 typedef struct affe__font affe__font;
@@ -361,6 +375,8 @@ int affe_font_add(affe_context* ctx, void* data, int index, int take_ownership)
 	if (!stbtt_InitFont(&font->metrics, (const unsigned char*)font->data, stbtt_GetFontOffsetForIndex((const unsigned char*)font->data, index)))
 		goto error;
 
+	stbtt_GetFontVMetrics(&font->metrics, &font->ascent, &font->descent, &font->line_gap);
+
 	return font_index;
 
 error:
@@ -372,6 +388,7 @@ error:
 int affe_font_fallback(affe_context* ctx, int base, int fallback)
 {
 	if (!ctx) return FALSE;
+	if (base < 0 || base >= ctx->fonts_count) return FALSE;
 
 	affe__font* font_base = ctx->fonts[base];
 
@@ -437,7 +454,7 @@ void affe_state_push(affe_context* ctx)
 	if (ctx->states_count >= AFFE_MAX_STATES)
 	{
 		if (ctx->info.error_proc)
-			ctx->info.error_proc(ctx, ctx->info.error_user_ptr, AFFE_ERROR_STATES_OVERFLOW);
+			ctx->info.error_proc(ctx, ctx->info.user_ptr, AFFE_ERROR_STATES_OVERFLOW);
 		return;
 	}
 	if (ctx->states_count > 0)
@@ -452,10 +469,30 @@ void affe_state_pop(affe_context* ctx)
 	if (ctx->states_count <= 1)
 	{
 		if (ctx->info.error_proc)
-			ctx->info.error_proc(ctx, ctx->info.error_user_ptr, AFFE_ERROR_STATES_UNDERFLOW);
+			ctx->info.error_proc(ctx, ctx->info.user_ptr, AFFE_ERROR_STATES_UNDERFLOW);
 		return;
 	}
 	--ctx->states_count;
+}
+
+void affe_cache_invalidate(affe_context* ctx)
+{
+	if (!ctx) return;
+
+	// Since glyph data will be invalid after this function, flush all existing data from the buffer
+	affe_buffer_flush(ctx);
+
+	// Recreate packer
+	stbrp_init_target(&ctx->packer, ctx->info.width, ctx->info.height, ctx->packer_nodes, ctx->packer_nodes_count);
+
+	for (int i = 0; i < ctx->fonts_count; ++i)
+	{
+		// Clear lut
+		for (int j = 0; j < AFFE_HASH_LUT_SIZE; ++j)
+			ctx->fonts[i]->lut[j] = -1;
+
+		ctx->fonts[i]->glyphs_count = 0;
+	}
 }
 
 void affe_state_clear(affe_context* ctx)
@@ -492,7 +529,7 @@ affe_context* affe_context_create(const affe_context_create_info* info)
 {
 	// Allocate context
 	affe_context* ctx = (affe_context*)malloc(sizeof(affe_context));
-	if (ctx == NULL) goto error;
+	if (!ctx) goto error;
 	memset(ctx, 0, sizeof(affe_context));
 
 	ctx->info = *info;
@@ -500,19 +537,17 @@ affe_context* affe_context_create(const affe_context_create_info* info)
 	// Setup rectangle packer
 	ctx->packer_nodes_count = ctx->info.width;
 	ctx->packer_nodes = (stbrp_node*)malloc(ctx->packer_nodes_count * sizeof(stbrp_node));
-	if (ctx->packer_nodes == NULL) goto error;
+	if (!ctx->packer_nodes) goto error;
 	stbrp_init_target(&ctx->packer, ctx->info.width, ctx->info.height, ctx->packer_nodes, ctx->packer_nodes_count);
 
 	// Invoke user create function
-	if (ctx->info.create_proc != NULL)
-	{
+	if (ctx->info.create_proc)
 		if (ctx->info.create_proc(ctx, ctx->info.user_ptr, ctx->info.width, ctx->info.height) == FALSE)
 			goto error;
-	}
 
 	// Allocate font
 	ctx->fonts = (affe__font**)malloc(AFFE_INIT_FONTS * sizeof(affe__font*));
-	if (ctx->fonts == NULL) goto error;
+	if (!ctx->fonts) goto error;
 	memset(ctx->fonts, 0, AFFE_INIT_FONTS * sizeof(affe__font*));
 	ctx->fonts_capacity = AFFE_INIT_FONTS;
 	ctx->fonts_count = 0;
@@ -576,7 +611,7 @@ void affe_buffer_flush(affe_context* ctx)
 	if (!ctx) return;
 	if (ctx->verts_count <= 0) return;
 
-	if (ctx->info.draw_proc != NULL)
+	if (ctx->info.draw_proc)
 		ctx->info.draw_proc(ctx, ctx->info.user_ptr, ctx->verts, ctx->verts_count);
 
 	ctx->verts_count = 0;
@@ -605,7 +640,7 @@ static affe__glyph* affe__glyph__alloc(affe__font* font)
 	{
 		font->glyphs_capacity = font->glyphs_capacity == 0 ? AFFE_INIT_GLYPHS : font->glyphs_capacity * 2;
 		affe__glyph* new_alloc = (affe__glyph*)realloc(font->glyphs, font->glyphs_capacity * sizeof(affe__glyph));
-		if (new_alloc == NULL) return NULL;
+		if (!new_alloc) return NULL;
 		font->glyphs = new_alloc;
 	}
 
@@ -643,6 +678,9 @@ static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int co
 		}
 	}
 
+	affe__glyph* glyph = affe__glyph__alloc(font);
+	if (glyph == NULL) return NULL;
+
 	float scale = stbtt_ScaleForPixelHeight(&font_render->metrics, size);
 
 	int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
@@ -658,7 +696,7 @@ static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int co
 		if (!stbrp_pack_rects(&ctx->packer, &rect, 1))
 		{
 			if (ctx->info.error_proc)
-				ctx->info.error_proc(ctx, ctx->info.error_user_ptr, AFFE_ERROR_ATLAS_FULL);
+				ctx->info.error_proc(ctx, ctx->info.user_ptr, AFFE_ERROR_ATLAS_FULL);
 			if (!stbrp_pack_rects(&ctx->packer, &rect, 1)) return NULL;
 		}
 
@@ -668,26 +706,22 @@ static affe__glyph* affe__glyph__get(affe_context* ctx, affe__font* font, int co
 		stbtt_FreeSDF(pixels, NULL);
 	}
 
-	int advance;
-	stbtt_GetGlyphHMetrics(&font_render->metrics, glyph_index, &advance, NULL);
-
-	affe__glyph* glyph = affe__glyph__alloc(font);
-	if (glyph == NULL) return NULL;
+	stbtt_GetGlyphHMetrics(&font_render->metrics, glyph_index, &glyph->advance, NULL);
 
 	glyph->s0 = rect.x;
 	glyph->t0 = rect.y + rect.h;
 	glyph->s1 = rect.x + rect.w;
 	glyph->t1 = rect.y;
 
-	glyph->x0 = (int)(x0 - (float)padding / scale);
-	glyph->y0 = (int)(y0 - (float)padding / scale);
-	glyph->x1 = (int)(x1 + (float)padding / scale);
-	glyph->y1 = (int)(y1 + (float)padding / scale);
+	glyph->padding = (float)padding / scale;
+	glyph->x0 = x0 - glyph->padding;
+	glyph->y0 = y0 - glyph->padding;
+	glyph->x1 = x1 + glyph->padding;
+	glyph->y1 = y1 + glyph->padding;
 
 	glyph->codepoint = codepoint;
 	glyph->size = size;
 	glyph->index = glyph_index;
-	glyph->advance = advance;
 
 	glyph->next = font->lut[hash];
 	font->lut[hash] = font->glyphs_count - 1;
@@ -761,24 +795,23 @@ void affe_text_draw(affe_context* ctx, float x, float y, const char* string, con
 	if (state->font < 0 || state->font >= ctx->fonts_count) return;
 
 	affe__font* font = ctx->fonts[state->font];
-	if (font->data == NULL) return;
+	if (!font->data) return;
 
 	const int prev_flush_control = ctx->buffer_flush_control;
 
 	if (prev_flush_control == AFFE_BUFFER_FLUSH_CONTROL_AUTOMATIC)
 		affe_buffer_flush_control(ctx, AFFE_BUFFER_FLUSH_CONTROL_NONE);
 
-	// TODO: Store this information inside the font
-	int ascent, descent, line_gap;
-	stbtt_GetFontVMetrics(&font->metrics, &ascent, &descent, &line_gap);
-	int line_height = ascent + line_gap - descent;
+	int line_height = font->ascent + font->line_gap - font->descent;
 	float scale = stbtt_ScaleForPixelHeight(&font->metrics, state->size);
+
+	const float line_height_scaled = (float)line_height * scale;
 
 	const char* line_end, * next_start;
 	while (affe__text__line(string, end, &line_end, &next_start))
 	{
 		affe_text_draw_inline(ctx, x, y, string, line_end);
-		y -= (float)line_height * scale;
+		y -= line_height_scaled;
 		string = next_start;
 	}
 
@@ -833,13 +866,10 @@ static void affe__text_width(affe_context* ctx, const char* string, const char* 
 
 		if (glyph)
 		{
-			int glyph_left = cursor + glyph->x0;
-			int glyph_right = cursor + glyph->x1;
+			int glyph_left = cursor + glyph->x0 + glyph->padding;
+			int glyph_right = cursor + glyph->x1 - glyph->padding;
 
-			if (glyph_left < lhs)
-			{
-				lhs = glyph_left;
-			}
+			if (glyph_left < lhs) lhs = glyph_left;
 			if (glyph_right > rhs) rhs = glyph_right;
 
 			cursor += glyph->advance;
