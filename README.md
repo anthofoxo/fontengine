@@ -1,3 +1,5 @@
+!! Warning, a newer more spohisticated version of this is under development, improving glyph rendering and multilingual support !!
+
 !! Under active development, api *may* change, readme may not necessarily be up to date !!
 
 !! Todo: Move documentation into github wiki pages
