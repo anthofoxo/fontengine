@@ -1,3 +1,5 @@
+!! UPDATE !! Library will be updated to use c++! the api however will remain c style !!
+
 !! Warning, a newer more spohisticated version of this is under development, improving glyph rendering and multilingual support !!
 
 !! Under active development, api *may* change, readme may not necessarily be up to date !!
