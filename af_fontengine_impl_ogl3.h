@@ -1,4 +1,4 @@
-/* af_fontengine_impl_ogl3.h Last Updated: v0.1.7
+/* af_fontengine_impl_ogl3.h Last Updated: v0.1.8
 
 Authored from 2023 by AnthoFoxo
 
@@ -34,7 +34,6 @@ extern "C" {
 #endif
 
 AFFE_API affe_context* affe_ogl3_context_create(int width, int height, int quads, int padding, int size);
-AFFE_API void affe_ogl3_viewport(affe_context* ctx, int width, int height);
 AFFE_API void affe_ogl3_context_delete(affe_context* ctx);
 
 #ifdef __cplusplus
@@ -45,12 +44,30 @@ AFFE_API void affe_ogl3_context_delete(affe_context* ctx);
 
 #ifdef AFFE_OGL3_IMPLEMENTATION
 
+// Use c++20 std::bit_cast if available
+#if __cpp_lib_bit_cast == 201806L
+#	include <bit>
+#else
+#	include <type_traits>
+namespace std // Yes I know this is illegal, sue me :3
+{
+	template<class To, class From>
+	std::enable_if_t<sizeof(To) == sizeof(From) && std::is_trivially_copyable_v<From>&& std::is_trivially_copyable_v<To>, To>
+		// constexpr support needs compiler magic
+		bit_cast(const From& src) noexcept {
+		static_assert(std::is_trivially_constructible_v<To>, "This implementation additionally requires destination type to be trivially constructible");
+		To dst;
+		std::memcpy(&dst, &src, sizeof(To));
+		return dst;
+	}
+}
+#endif
+
 struct affe__ogl
 {
 	GLuint program;
 	GLuint texture;
 	GLuint vao, vbo;
-	int w, h;
 };
 
 static unsigned int affe__ogl__make_shader(unsigned int type, const char* source)
@@ -150,9 +167,17 @@ error:
 static void update(affe_context* ctx, void* user_ptr, int x, int y, int w, int h, void* pixels)
 {
 	affe__ogl* ptr = ((affe__ogl*)affe_user_ptr(ctx));
+
+	int prev_unpack_alignment; glGetIntegerv(GL_UNPACK_ALIGNMENT, &prev_unpack_alignment);
+	int prev_texture_binding; glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_texture_binding);
+
 	glBindTexture(GL_TEXTURE_2D, ptr->texture);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
 	glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RED, GL_UNSIGNED_BYTE, pixels);
+
+	glPixelStorei(GL_UNPACK_ALIGNMENT, prev_unpack_alignment);
+	glBindTexture(GL_TEXTURE_2D, std::bit_cast<unsigned int>(prev_texture_binding));
 }
 
 float af_linear_remap(float value, float min1, float max1, float min2, float max2) {
@@ -165,19 +190,52 @@ static void draw(affe_context* ctx, void* user_ptr, affe_vertex* verts, long lon
 
 	for (long long i = 0; i < verts_count; ++i)
 	{
-		verts[i].x = af_linear_remap<float>(verts[i].x, 0, (float)ptr->w, -1.0f, 1.0f);
-		verts[i].y = af_linear_remap<float>(verts[i].y, 0, (float)ptr->h, -1.0f, 1.0f);
+		verts[i].x = af_linear_remap(verts[i].x, 0, (float)ctx->canvas_width, -1.0f, 1.0f);
+		verts[i].y = af_linear_remap(verts[i].y, 0, (float)ctx->canvas_height, -1.0f, 1.0f);
 	}
 
-	glBindBuffer(GL_ARRAY_BUFFER, ptr->vbo);
-	glBufferData(GL_ARRAY_BUFFER, affe_buffer_size(ctx), NULL, GL_STREAM_DRAW); // invalidation
-	glBufferSubData(GL_ARRAY_BUFFER, 0, verts_count * sizeof(affe_vertex), verts);
+	// Update buffer contents
+	{
+		int prev_array_buffer; glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prev_array_buffer);
+
+		glBindBuffer(GL_ARRAY_BUFFER, ptr->vbo);
+		glBufferData(GL_ARRAY_BUFFER, affe_buffer_size(ctx), NULL, GL_STREAM_DRAW); // invalidation
+		glBufferSubData(GL_ARRAY_BUFFER, 0, verts_count * sizeof(affe_vertex), verts);
+
+		glBindBuffer(GL_ARRAY_BUFFER, prev_array_buffer);
+	}
+	
+	GLint prev_vertex_array; glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vertex_array);
+	GLint prev_active_texture; glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_active_texture);
+	GLint prev_texture; glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_texture);
+	GLboolean prev_blend_enabled; glGetBooleanv(GL_BLEND, &prev_blend_enabled);
+	GLint prev_blend_src; glGetIntegerv(GL_BLEND_SRC_ALPHA, &prev_blend_src);
+	GLint prev_blend_dst; glGetIntegerv(GL_BLEND_DST_ALPHA, &prev_blend_dst);
+	GLint prev_program; glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
+	GLint prev_depthmask; glGetIntegerv(GL_DEPTH_WRITEMASK, &prev_depthmask);
+	GLint prev_depthtest; glGetIntegerv(GL_DEPTH_TEST, &prev_depthtest);
 
 	glBindVertexArray(ptr->vao);
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, ptr->texture);
 	glUseProgram(ptr->program);
+
+	glDisable(GL_DEPTH_TEST);
+	glDepthMask(GL_FALSE);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
 	glDrawArrays(GL_TRIANGLES, 0, verts_count);
+
+	glBindVertexArray(std::bit_cast<GLuint>(prev_vertex_array));
+	glUseProgram(std::bit_cast<GLuint>(prev_program));
+	glActiveTexture(std::bit_cast<GLenum>(prev_active_texture));
+	glBindTexture(GL_TEXTURE_2D, std::bit_cast<GLuint>(prev_texture));
+
+	if (prev_depthmask) glDepthMask(GL_TRUE);
+	if (prev_blend_enabled) glEnable(GL_BLEND);
+	if (prev_depthtest) glEnable(GL_DEPTH_TEST);
+	glBlendFunc(prev_blend_src, prev_blend_dst);
 }
 
 static void destroy(affe_context* ctx, void* user_ptr)
@@ -226,12 +284,6 @@ void affe_ogl3_context_delete(affe_context* ctx)
 	void* user_ptr = affe_user_ptr(ctx);
 	affe_context_delete(ctx);
 	free(user_ptr);
-}
-
-void affe_ogl3_viewport(affe_context* ctx, int width, int height)
-{
-	((affe__ogl*)affe_user_ptr(ctx))->w = width;
-	((affe__ogl*)affe_user_ptr(ctx))->h = height;
 }
 
 #endif // AFFE_OGL3_IMPLEMENTATION

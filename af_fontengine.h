@@ -1,4 +1,55 @@
-/* af_fontengine.h - v0.1.7
+/* af_fontengine.h - v0.1.8
+
+Api / Platform agnostic font rendering engine. (Comes with a builtin opengl 3 implmentation!)
+
+Usage example:
+
+// BEGIN USAGE
+
+#define STB_RECT_PACK_IMPLEMENTATION
+#define STB_TRUETYPE_IMPLEMENTATION
+#define AFFE_IMPLEMENTATION
+#include "stb_rect_pack.h"
+#include "stb_truetype.h"
+#include "af_fontengine.h"
+#define AFFE_OGL3_IMPLEMENTATION
+#include "af_fontengine_impl_ogl3.h"
+
+// Called during init
+affe_context* ctx;
+void* font;
+
+void Init() {
+	// Load a font file to be used
+	font = loadbinary("fontfile.ttf");
+
+	// Create a context with opengl, 1024x1024 cache texture, 8px padding, sdf size of 48
+	ctx = affe_ogl3_context_create(1024, 1024, 256, 8, 48);
+
+	// Add font to engine, do not take ownership
+	int id = affe_font_add(ctx, font, 0, FALSE);
+	// Set this to be the current font
+	affe_set_font(ctx, id);
+
+	// Set viewport size, must be called when framebuffer changes too
+	affe_viewport(ctx, 1920, 1080);
+}
+
+// Called during termination
+void Destroy() {
+	affe_ogl3_context_delete(ctx);
+	free(font);
+}
+
+// Called once per frame
+void OnRender() {
+	// Drawing text is super easy!
+	affe_text_draw(ctx, x, y, "Hi mom!", nullptr);
+
+	// More features are available. Read documentation of the functions below
+}
+
+/// END USAGE
 
 Authored from 2023 by AnthoFoxo
 
@@ -16,6 +67,7 @@ freely, subject to the following restrictions:
    misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
 
+
 Credits to Sean Barrett, Mikko Mononen, Bjoern Hoehrmann, and the community for making this project possible.
 
 Visit the github page for updates and documentation: https://github.com/anthofoxo/fontengine
@@ -24,6 +76,10 @@ Contributor list
 AnthoFoxo
 
 Recent version history:
+0.1.8 (2023-12-16)
+	opengl implmentation sets all needed state, now restores previous
+	added `affe_viewport` Sets the viewport when called, should be done anytime the surface changes size
+	added inline documentation and example
 0.1.7 (2023-01-28)
 	fixed bug where text width incorrectly used padding
 	removed error proc from having its own user ptr
@@ -66,7 +122,7 @@ Recent version history:
 #ifndef AF_FONTENGINE_H
 #define AF_FONTENGINE_H
 
-#define AFFE_VERSION 0.1.7
+#define AFFE_VERSION 0.1.8
 
 #ifndef NULL
 #	define NULL 0
@@ -150,90 +206,91 @@ struct affe_context_create_info
 
 typedef struct affe_context_create_info affe_context_create_info;
 
-// ----- context management -----
+// PUBLIC API
 
+// Create a new context, should be used by backends, look at your implmentation header for your create function
 AFFE_API affe_context* affe_context_create(const affe_context_create_info* info);
+
+// Delete a context, should be used by backends, look at your implmentation header for your delete function
 AFFE_API void affe_context_delete(affe_context* ctx);
 
-// ----- user ptr -----
-
-// Errors: nofail error guarantee
+// Backend function, get the backend pointer
 AFFE_API void* affe_user_ptr(affe_context* ctx);
 
 // ----- fonts -----
 
-// Errors: nofail error guarantee
-AFFE_API int affe_font_add(affe_context* ctx, void* data, int index, int take_ownership);
+// Add a font to the engine
+// data will never be copied and must remain valid for the lifetime of the engine
+// if take_ownership is true, the engine will automatically free the data pointer with `free`
+AFFE_API int affe_font_add(affe_context* ctx, void* data, int index, bool take_ownership);
 
-// Errors: nofail error guarantee
+// If a glyph cannot be found in a font, it will look through the fallback fonts to match a glyph
 AFFE_API int affe_font_fallback(affe_context* ctx, int base, int fallback);
 
-// ----- state management -----
-
-// Errors: strong error guarantee
+// Push a new state that matches the current state on the top of the stack
+// Must have a matching `affe_state_pop` call later.
 AFFE_API void affe_state_push(affe_context* ctx);
 
-// Errors: strong error guarantee
+// Pop the current state, restores the last state
 AFFE_API void affe_state_pop(affe_context* ctx);
 
-// Errors: nofail error guarantee
+// Set state values to their defaults
 AFFE_API void affe_state_clear(affe_context* ctx);
 
-// ----- cache control -----
+// Set the canvas/viewport size, should be called when the framebuffer changes size
+AFFE_API void affe_viewport(affe_context* ctx, int width, int height);
 
-// Errors: nofail error guarantee
+// Request the backend to clear glyph references, backend is allowed invalidate the cache texture
 AFFE_API void affe_cache_invalidate(affe_context* ctx);
 
 
-// ----- state setting -----
-
-// Errors: nofail error guarantee
+// Set the current font size in pixels (relative to viewport size)
 AFFE_API void affe_set_size(affe_context* ctx, float size);
 
-// Errors: nofail error guarantee
+// Set the current font color
 AFFE_API void affe_set_color(affe_context* ctx, float r, float g, float b, float a);
 
-// Errors: nofail error guarantee
+// Set current font face
 AFFE_API void affe_set_font(affe_context* ctx, int font);
 
-// Errors: nofail error guarantee
+// Set current font alignment, one of: AFFE_ALIGN_LEFT, AFFE_ALIGN_CENTER, AFFE_ALIGN_RIGHT
 AFFE_API void affe_set_alignment(affe_context* ctx, int alignment);
-
-// ----- buffer control -----
 
 // Controls the behavior of buffer flushing.
 // `AFFE_BUFFER_FLUSH_CONTROL_AUTOMATIC` (default): Buffer is flushed at the end of text draws or when the buffer is filled.
 // `AFFE_BUFFER_FLUSH_CONTROL_NONE`: Buffer is only flushed when filled or manually via `affe_buffer_flush`.
 // 
 // Notes: It is UB to use any other control value than listed above.
-// Errors: nofail error guarantee
 // See: `affe_buffer_flush`
 AFFE_API void affe_buffer_flush_control(affe_context* ctx, int control);
 
-// Manually flush the buffer.
+// Flush the vertex buffer.
 // This is required at the end of each frame when buffer control is set to `AFFE_BUFFER_FLUSH_CONTROL_NONE`
-// 
-// Errors: nofail error guarantee
+//
 // See: `affe_buffer_flush_control`
 AFFE_API void affe_buffer_flush(affe_context* ctx);
 
+// Used by backends
 // Get the max size of the buffer in bytes
 // Can be used in callbacks to allocate the buffer for the backend
-// Errors:
-// - nofail error guarantee
-// - Returns 0 if an error occurs
 AFFE_API long long affe_buffer_size(affe_context* ctx);
 
-// ----- text drawing -----
-
+// Draw some text!
+// Line endings will be respected
+// string is a pointer to the start of some text
+// end is a pointer to the end of the text, may be nullptr to use entire text
+// if end is null its calculated using `end = start + strlen(start)`
 AFFE_API void affe_text_draw(affe_context* ctx, float x, float y, const char* string, const char* end);
 
-// Draws a string of text in a single line, ignoring all line endings
+// Draw some text!
+// Line endings will **NOT** be respected
 AFFE_API void affe_text_draw_inline(affe_context* ctx, float x, float y, const char* string, const char* end);
 
 #ifdef __cplusplus
 }
 #endif
+
+// END PUBLIC API
 
 #endif // AF_FONTENGINE_H
 
@@ -274,7 +331,7 @@ struct affe__font
 	stbtt_fontinfo metrics;
 
 	void* data;
-	unsigned char is_owner;
+	bool is_owner;
 
 	affe__glyph* glyphs;
 	int glyphs_capacity;
@@ -319,6 +376,9 @@ struct affe_context
 	int packer_nodes_count;
 
 	int buffer_flush_control;
+
+	int canvas_width;
+	int canvas_height;
 };
 
 static void affe__font__free(affe__font* font)
@@ -357,7 +417,7 @@ error:
 	return AFFE_INVALID;
 }
 
-int affe_font_add(affe_context* ctx, void* data, int index, int take_ownership)
+int affe_font_add(affe_context* ctx, void* data, int index, bool take_ownership)
 {
 	if (!ctx) return AFFE_INVALID;
 
@@ -370,7 +430,7 @@ int affe_font_add(affe_context* ctx, void* data, int index, int take_ownership)
 		font->lut[i] = -1;
 
 	font->data = data;
-	font->is_owner = (unsigned char)take_ownership;
+	font->is_owner = take_ownership;
 
 	if (!stbtt_InitFont(&font->metrics, (const unsigned char*)font->data, stbtt_GetFontOffsetForIndex((const unsigned char*)font->data, index)))
 		goto error;
@@ -493,6 +553,13 @@ void affe_cache_invalidate(affe_context* ctx)
 
 		ctx->fonts[i]->glyphs_count = 0;
 	}
+}
+
+void affe_viewport(affe_context* ctx, int width, int height)
+{
+	if (!ctx) return;
+	ctx->canvas_width = width;
+	ctx->canvas_height = height;
 }
 
 void affe_state_clear(affe_context* ctx)
